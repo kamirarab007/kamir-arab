@@ -1,0 +1,39 @@
+{
+  "name": "Kamir Arab",
+  "short_name": "Kamir Arab",
+  "description": "Pencatatan produksi dan penjualan Kamir Arab — adonan, stok, dan laporan harian.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "kamir-arab-app",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#231E1A",
+  "theme_color": "#231E1A",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
