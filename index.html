@@ -310,10 +310,12 @@
     <div class="titles">
       <div style="display:flex;align-items:baseline;gap:6px;">
         <input id="shopName" maxlength="28" style="flex:1;min-width:0;" />
-        <span style="font-size:9px;color:var(--faint);font-weight:600;letter-spacing:.3px;flex-shrink:0;">v1.1</span>
+        <span style="font-size:9px;color:var(--faint);font-weight:600;letter-spacing:.3px;flex-shrink:0;">v1.3</span>
+        <span id="syncStatus" style="font-size:9px;color:var(--faint);font-weight:600;flex-shrink:0;">●</span>
       </div>
       <div class="subtitle" id="headerSubtitle">Pencatatan produksi & penjualan</div>
     </div>
+    <button id="btnOpenPriceSettings" style="background:none;border:none;color:var(--faint);font-size:19px;cursor:pointer;padding:6px;flex-shrink:0;" title="Pengaturan Harga">⚙️</button>
   </header>
 
   <main id="app"></main>
@@ -327,7 +329,56 @@
   </nav>
 </div>
 
-<script>
+<script type="module">
+/* ================= FIREBASE (real-time sync) ================= */
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import {
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBPfWUVxoe1xwXdxRg4Yii7eDH59ELKVAc",
+  authDomain: "kamir-arab.firebaseapp.com",
+  projectId: "kamir-arab",
+  storageBucket: "kamir-arab.firebasestorage.app",
+  messagingSenderId: "892428901247",
+  appId: "1:892428901247:web:c22fc1541659b730f8d84a"
+};
+
+let cloudReady = false;
+let db = null;
+try{
+  const fbApp = initializeApp(firebaseConfig);
+  db = getFirestore(fbApp);
+  cloudReady = true;
+}catch(e){
+  console.warn('Firebase gagal diinisialisasi, app tetap jalan lokal saja.', e);
+}
+
+window.addEventListener('DOMContentLoaded', ()=>{
+  const statusEl = document.getElementById('syncStatus');
+  if(statusEl && !cloudReady){
+    statusEl.textContent = '○';
+    statusEl.title = 'Mode lokal saja (cloud tidak aktif)';
+  }
+});
+
+const COL_BATCHES = 'kamir_batches';
+const COL_SALES = 'kamir_sales';
+const COL_TX = 'kamir_transactions';
+const SETTINGS_DOC = 'kamir_settings/main';
+
+// semua fungsi push ke cloud "fire and forget" — kalau gagal (offline dll), data lokal tetap aman
+function cloudSetBatch(id, data){ if(!cloudReady) return; setDoc(doc(db, COL_BATCHES, id), data).catch(()=>{}); }
+function cloudUpdateBatch(id, patch){ if(!cloudReady) return; updateDoc(doc(db, COL_BATCHES, id), patch).catch(()=>{}); }
+function cloudDeleteBatch(id){ if(!cloudReady) return; deleteDoc(doc(db, COL_BATCHES, id)).catch(()=>{}); }
+function cloudSetSale(id, data){ if(!cloudReady) return; setDoc(doc(db, COL_SALES, id), data).catch(()=>{}); }
+function cloudUpdateSale(id, patch){ if(!cloudReady) return; updateDoc(doc(db, COL_SALES, id), patch).catch(()=>{}); }
+function cloudDeleteSale(id){ if(!cloudReady) return; deleteDoc(doc(db, COL_SALES, id)).catch(()=>{}); }
+function cloudSetTx(id, data){ if(!cloudReady) return; setDoc(doc(db, COL_TX, id), data).catch(()=>{}); }
+function cloudDeleteTx(id){ if(!cloudReady) return; deleteDoc(doc(db, COL_TX, id)).catch(()=>{}); }
+function cloudSetSettings(data){ if(!cloudReady) return; setDoc(doc(db, SETTINGS_DOC), data, {merge:true}).catch(()=>{}); }
+
 /* ================= DATA & CONFIG ================= */
 const STORAGE_KEY = 'kamirData_v2';
 const OLD_STORAGE_KEY = 'kamirData_v1';
@@ -420,6 +471,16 @@ if(!state.shopName) state.shopName = 'Kamir Arab';
 if(typeof state.employeeName !== 'string') state.employeeName = '';
 if(!state.days) state.days = {};
 if(!state.monthly) state.monthly = {};
+if(!state.prices){
+  state.prices = {};
+  VARIAN.forEach(v=> state.prices[v.key] = v.harga);
+}
+// isi harga varian baru (kalau ada) yang belum punya harga tersimpan
+VARIAN.forEach(v=>{ if(typeof state.prices[v.key] !== 'number') state.prices[v.key] = v.harga; });
+
+function getHarga(key){
+  return (state.prices && typeof state.prices[key]==='number') ? state.prices[key] : varianByKey(key).harga;
+}
 
 /* ============== 30-day retention -> monthly archive ============== */
 function archiveOldDays(){
@@ -432,14 +493,16 @@ function archiveOldDays(){
       const monthKey = dateStr.slice(0,7);
       if(!state.monthly[monthKey]){
         state.monthly[monthKey] = {perVarian:{}, revenue:0, batchCount:0, dayCount:0, paymentTotals:{cash:0,tf:0,qris:0}};
-        VARIAN.forEach(v=> state.monthly[monthKey].perVarian[v.key] = {printed:0, sold:0});
+        VARIAN.forEach(v=> state.monthly[monthKey].perVarian[v.key] = {printed:0, sold:0, revenue:0});
       }
       const m = state.monthly[monthKey];
       if(!m.paymentTotals) m.paymentTotals = {cash:0,tf:0,qris:0};
       const totals = computeDayTotals(dateStr);
       VARIAN.forEach(v=>{
+        if(!m.perVarian[v.key].revenue) m.perVarian[v.key].revenue = 0;
         m.perVarian[v.key].printed += totals.perVarian[v.key].printed;
         m.perVarian[v.key].sold += totals.perVarian[v.key].sold;
+        m.perVarian[v.key].revenue += totals.perVarian[v.key].revenue;
       });
       m.revenue += totals.revenue;
       m.batchCount += totals.batchCount;
@@ -447,6 +510,15 @@ function archiveOldDays(){
       m.paymentTotals.cash += totals.paymentTotals.cash;
       m.paymentTotals.tf += totals.paymentTotals.tf;
       m.paymentTotals.qris += totals.paymentTotals.qris;
+
+      // hapus juga entri hari itu dari cloud (Firestore), biar collection tetap ramping
+      ['pagi','sore'].forEach(sh=>{
+        const shData = state.days[dateStr][sh] || {batches:[],sales:[],transactions:[]};
+        (shData.batches||[]).forEach(b=> cloudDeleteBatch(b.id));
+        (shData.sales||[]).forEach(s=> cloudDeleteSale(s.id));
+        (shData.transactions||[]).forEach(t=> cloudDeleteTx(t.id));
+      });
+
       delete state.days[dateStr];
       changed = true;
     }
@@ -479,7 +551,7 @@ function computeDayTotals(dateStr){
   const perVarian = {};
   let revenue=0, batchCount=0, totalPrinted=0, totalSold=0;
   const paymentTotals = {cash:0, tf:0, qris:0};
-  VARIAN.forEach(v=> perVarian[v.key] = {printed:0, sold:0});
+  VARIAN.forEach(v=> perVarian[v.key] = {printed:0, sold:0, revenue:0});
   ['pagi','sore'].forEach(sh=>{
     const s = day[sh] || {batches:[],sales:[]};
     (s.batches||[]).forEach(b=>{
@@ -487,8 +559,10 @@ function computeDayTotals(dateStr){
       RASA.forEach(r=>{ perVarian[b.dasar+'_'+r.key].printed += Number(b[r.key])||0; });
     });
     (s.sales||[]).forEach(sale=>{
-      const amt = (Number(sale.qty)||0) * varianByKey(sale.varian).harga;
+      const harga = (typeof sale.harga === 'number') ? sale.harga : getHarga(sale.varian);
+      const amt = (Number(sale.qty)||0) * harga;
       perVarian[sale.varian].sold += Number(sale.qty)||0;
+      perVarian[sale.varian].revenue += amt;
       revenue += amt;
       paymentTotals[paymentKey(sale.payment)] += amt;
     });
@@ -503,14 +577,16 @@ function computeShiftTotals(dateStr, shift){
   const perVarian = {};
   let revenue=0, totalPrinted=0, totalSold=0, kgPutih=0, kgPandan=0;
   const paymentTotals = {cash:0, tf:0, qris:0};
-  VARIAN.forEach(v=> perVarian[v.key] = {printed:0, sold:0});
+  VARIAN.forEach(v=> perVarian[v.key] = {printed:0, sold:0, revenue:0});
   (s.batches||[]).forEach(b=>{
     if(b.dasar==='putih') kgPutih += Number(b.kg)||0; else kgPandan += Number(b.kg)||0;
     RASA.forEach(r=>{ perVarian[b.dasar+'_'+r.key].printed += Number(b[r.key])||0; });
   });
   (s.sales||[]).forEach(sale=>{
-    const amt = (Number(sale.qty)||0) * varianByKey(sale.varian).harga;
+    const harga = (typeof sale.harga === 'number') ? sale.harga : getHarga(sale.varian);
+    const amt = (Number(sale.qty)||0) * harga;
     perVarian[sale.varian].sold += Number(sale.qty)||0;
+    perVarian[sale.varian].revenue += amt;
     revenue += amt;
     paymentTotals[paymentKey(sale.payment)] += amt;
   });
@@ -529,8 +605,6 @@ let ui = {
   tab: 'input',
   inputDate: todayStr(),
   inputShift: currentHourShift(),
-  saleVarian: VARIAN[0].key,
-  salePayment: 'cash',
   ringkasanDate: todayStr(),
   riwayatDetail: null,
   bulananDetail: null,
@@ -541,11 +615,16 @@ let ui = {
   kasirVarianPick: VARIAN[0].key,
   kasirQty: '',
   receiptView: null,
+  showPriceSettings: false,
 };
 
 const app = document.getElementById('app');
 
 function render(){
+  if(ui.showPriceSettings){
+    renderPriceSettingsOverlay();
+    return;
+  }
   document.querySelectorAll('#bottomnav button').forEach(b=>{
     b.classList.toggle('active', b.dataset.tab===ui.tab);
   });
@@ -600,27 +679,7 @@ function renderInput(){
       <div id="batchActivityList"></div>
     ` : ''}
 
-    <h2 class="section-title">Penjualan</h2>
-    <div class="varian-pick" id="salePickList"></div>
-    <div style="font-size:12px;color:var(--faint);margin-bottom:14px;" id="saleStockInfo"></div>
-    <div class="field" style="margin-bottom:14px;">
-      <label>Jumlah terjual</label>
-      <input type="number" min="0" id="inpQty" placeholder="0" />
-    </div>
-    <div style="margin-bottom:6px;">
-      <label style="display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:6px;">Metode bayar</label>
-      <div class="shift-toggle" id="paymentPick">
-        ${Object.entries(PAYMENTS).map(([k,p])=>`
-          <button data-pay="${k}" class="${ui.salePayment===k?'active':''}">${p.label}</button>
-        `).join('')}
-      </div>
-    </div>
-    <button class="primary" id="btnSaveSale">Simpan Penjualan</button>
-
-    ${shiftData.sales.length>0 ? `
-      <h2 class="section-title sm">Penjualan tercatat — shift ${SHIFTS[ui.inputShift].label.toLowerCase()}</h2>
-      <div id="saleActivityList"></div>
-    ` : ''}
+    <div class="empty" style="margin-top:24px;">Pencatatan penjualan sekarang dilakukan lewat tab <b style="color:var(--gold);">🧾 Kasir</b>.</div>
 
     <h2 class="section-title">Sisa stok hari ini (semua shift)</h2>
     ${renderFlavorLines(dayTotals, false)}
@@ -640,49 +699,6 @@ function renderInput(){
   ['putih','pandan'].forEach(setupAdonanBlockLogic);
 
   if(shiftData.batches.length>0) renderBatchActivity(shiftData.batches);
-  if(shiftData.sales.length>0) renderSaleActivity(shiftData.sales);
-
-  // sale varian picker
-  const pickList = document.getElementById('salePickList');
-  function renderPick(){
-    pickList.innerHTML = VARIAN.map(v=>`
-      <button data-vk="${v.key}" class="${ui.saleVarian===v.key?'active':''}">
-        <span class="dot" style="background:${v.color}"></span>${DASAR[v.dasar].label} ${v.rasa}
-      </button>
-    `).join('');
-    pickList.querySelectorAll('button').forEach(b=>{
-      b.addEventListener('click', ()=>{ ui.saleVarian = b.dataset.vk; renderPick(); updateStockInfo(); });
-    });
-  }
-  function updateStockInfo(){
-    const t = computeDayTotals(ui.inputDate);
-    const st = t.perVarian[ui.saleVarian];
-    const stock = Math.max(st.printed - st.sold, 0);
-    document.getElementById('saleStockInfo').innerHTML =
-      'Stok tersedia hari ini: <b style="color:'+varianByKey(ui.saleVarian).color+'">'+stock+'</b> kamir';
-  }
-  renderPick();
-  updateStockInfo();
-
-  document.querySelectorAll('#paymentPick button').forEach(b=>{
-    b.addEventListener('click', ()=>{
-      ui.salePayment = b.dataset.pay;
-      document.querySelectorAll('#paymentPick button').forEach(x=> x.classList.toggle('active', x.dataset.pay===ui.salePayment));
-    });
-  });
-
-  document.getElementById('btnSaveSale').addEventListener('click', ()=>{
-    const qty = Number(document.getElementById('inpQty').value)||0;
-    if(qty<=0){ showToast('Isi jumlah terjual.', true); return; }
-    ensureDay(ui.inputDate);
-    state.days[ui.inputDate][ui.inputShift].sales.push({
-      id:uid(), time:new Date().toISOString(), varian:ui.saleVarian, qty,
-      payment: ui.salePayment, oleh: state.employeeName||''
-    });
-    saveData();
-    showToast('Terjual '+qty+' · '+varianLabel(ui.saleVarian));
-    render();
-  });
 }
 
 function renderAdonanBlock(dasar){
@@ -755,6 +771,7 @@ function setupAdonanBlockLogic(dasar){
     const batch = {id:uid(), time:new Date().toISOString(), dasar, kg, target, oleh: state.employeeName||'', ...rasaVals};
     state.days[ui.inputDate][ui.inputShift].batches.push(batch);
     saveData();
+    cloudSetBatch(batch.id, {...batch, dateStr: ui.inputDate, shift: ui.inputShift});
     showToast('Adonan '+DASAR[dasar].label+' tersimpan · '+sum+' kamir dicetak');
     render();
   });
@@ -788,7 +805,7 @@ function renderBatchActivity(batches){
       const id = inp.dataset.editbatch, field = inp.dataset.field;
       const val = Number(inp.value)||0;
       const batch = state.days[ui.inputDate][ui.inputShift].batches.find(x=>x.id===id);
-      if(batch){ batch[field] = val; saveData(); showToast('Diperbarui'); render(); }
+      if(batch){ batch[field] = val; saveData(); cloudUpdateBatch(id, {[field]: val}); showToast('Diperbarui'); render(); }
     });
   });
   el.querySelectorAll('[data-delbatch]').forEach(btn=>{
@@ -796,69 +813,12 @@ function renderBatchActivity(batches){
       if(!confirm('Hapus entri adonan ini?')) return;
       const id = btn.dataset.delbatch;
       state.days[ui.inputDate][ui.inputShift].batches = state.days[ui.inputDate][ui.inputShift].batches.filter(x=>x.id!==id);
-      saveData(); showToast('Entri adonan dihapus'); render();
+      saveData(); cloudDeleteBatch(id); showToast('Entri adonan dihapus'); render();
     });
   });
 }
 
-function renderSaleActivity(sales){
-  const el = document.getElementById('saleActivityList');
-  el.innerHTML = sales.map(s=>{
-    const v = varianByKey(s.varian);
-    const pk = paymentKey(s.payment);
-    const p = PAYMENTS[pk];
-    return `
-      <div class="activity-item" data-saleid="${s.id}">
-        <div class="top">
-          <span class="lbl"><span class="dot" style="background:${v.color}"></span>${DASAR[v.dasar].label} ${v.rasa}${s.oleh?' <span style="color:var(--faint);font-weight:500;">· '+s.oleh+'</span>':''}</span>
-          <span class="actions">
-            <div class="qty-stepper">
-              <button data-step="-1" data-saleid="${s.id}">−</button>
-              <input type="number" min="0" data-editsale="${s.id}" value="${s.qty}" />
-              <button data-step="1" data-saleid="${s.id}">+</button>
-            </div>
-            <button class="icon-btn danger" data-delsale="${s.id}">🗑</button>
-          </span>
-        </div>
-        <button class="pay-badge" data-cyclepay="${s.id}" style="border-color:${p.color};color:${p.color};">${p.label} ↻</button>
-      </div>
-    `;
-  }).join('');
 
-  el.querySelectorAll('[data-step]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const id = btn.dataset.saleid, dir = Number(btn.dataset.step);
-      const sale = state.days[ui.inputDate][ui.inputShift].sales.find(x=>x.id===id);
-      if(sale){ sale.qty = Math.max(0,(Number(sale.qty)||0)+dir); saveData(); render(); }
-    });
-  });
-  el.querySelectorAll('input[data-editsale]').forEach(inp=>{
-    inp.addEventListener('change', ()=>{
-      const id = inp.dataset.editsale;
-      const sale = state.days[ui.inputDate][ui.inputShift].sales.find(x=>x.id===id);
-      if(sale){ sale.qty = Math.max(0, Number(inp.value)||0); saveData(); showToast('Diperbarui'); render(); }
-    });
-  });
-  el.querySelectorAll('[data-cyclepay]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const id = btn.dataset.cyclepay;
-      const sale = state.days[ui.inputDate][ui.inputShift].sales.find(x=>x.id===id);
-      if(sale){
-        const order = ['cash','tf','qris'];
-        const next = order[(order.indexOf(paymentKey(sale.payment))+1)%order.length];
-        sale.payment = next; saveData(); render();
-      }
-    });
-  });
-  el.querySelectorAll('[data-delsale]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      if(!confirm('Hapus entri penjualan ini?')) return;
-      const id = btn.dataset.delsale;
-      state.days[ui.inputDate][ui.inputShift].sales = state.days[ui.inputDate][ui.inputShift].sales.filter(x=>x.id!==id);
-      saveData(); showToast('Entri penjualan dihapus'); render();
-    });
-  });
-}
 
 function renderPaymentCards(paymentTotals){
   return `
@@ -888,10 +848,52 @@ function renderFlavorLines(totals, showRevenue){
           <span class="nums">${t.sold}/${t.printed} terjual</span>
         </div>
         <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:linear-gradient(90deg,${v.color}aa,${v.color})"></div></div>
-        <div class="stock">Sisa: <b style="color:${v.color}">${stock}</b> kamir${showRevenue? ' · '+fmtRp(t.sold*v.harga):''}</div>
+        <div class="stock">Sisa: <b style="color:${v.color}">${stock}</b> kamir${showRevenue? ' · '+fmtRp(t.revenue):''}</div>
       </div>
     `;
   }).join('');
+}
+
+/* ---- PENGATURAN HARGA (overlay) ---- */
+function renderPriceSettingsOverlay(){
+  app.innerHTML = `
+    <div class="receipt-overlay" style="justify-content:flex-start;">
+      <h2 class="section-title" style="margin-top:6px;color:var(--cream);">⚙️ Pengaturan Harga</h2>
+      <div style="font-size:12px;color:var(--faint);margin-bottom:18px;text-align:center;">Perubahan harga cuma berlaku untuk transaksi baru — riwayat transaksi lama tidak berubah.</div>
+      <div style="width:100%;max-width:340px;">
+        ${['putih','pandan'].map(dasar=>`
+          <div style="font-family:'Fraunces',serif;font-weight:600;font-size:13.5px;color:var(--cream);margin:14px 0 8px;">${DASAR[dasar].label}</div>
+          ${VARIAN.filter(v=>v.dasar===dasar).map(v=>`
+            <div class="varian-row" style="margin-bottom:8px;">
+              <span class="dot" style="background:${v.color}"></span>
+              <span class="lbl">${v.rasa}</span>
+              <input type="number" min="0" step="500" data-pricekey="${v.key}" value="${getHarga(v.key)}" style="width:100px;" />
+            </div>
+          `).join('')}
+        `).join('')}
+      </div>
+      <div class="receipt-actions" style="margin-top:14px;">
+        <button class="primary" id="btnSavePrices">Simpan Harga</button>
+      </div>
+      <button class="receipt-close" id="btnClosePrices">Batal / Tutup</button>
+    </div>
+  `;
+
+  document.getElementById('btnSavePrices').addEventListener('click', ()=>{
+    document.querySelectorAll('[data-pricekey]').forEach(inp=>{
+      const val = Number(inp.value);
+      if(val>=0) state.prices[inp.dataset.pricekey] = val;
+    });
+    saveData();
+    cloudSetSettings({shopName: state.shopName, prices: state.prices});
+    ui.showPriceSettings = false;
+    showToast('Harga diperbarui');
+    render();
+  });
+  document.getElementById('btnClosePrices').addEventListener('click', ()=>{
+    ui.showPriceSettings = false;
+    render();
+  });
 }
 
 /* ---- KASIR TAB ---- */
@@ -904,7 +906,7 @@ function renderKasir(){
     return;
   }
 
-  const cartTotal = ui.cart.reduce((s,it)=> s + it.qty * varianByKey(it.varian).harga, 0);
+  const cartTotal = ui.cart.reduce((s,it)=> s + it.qty * getHarga(it.varian), 0);
   const cashGivenNum = Number(ui.cashGiven)||0;
   const change = cashGivenNum - cartTotal;
 
@@ -967,6 +969,7 @@ function renderKasir(){
       ` : ''}
 
       <button class="primary" id="btnFinalize" style="margin-top:6px;">Selesaikan & Buat Struk</button>
+      <button class="primary" id="btnFinalizeNoReceipt" style="margin-top:8px;background:rgba(245,239,227,0.08);color:var(--cream);">Selesaikan Tanpa Struk</button>
     ` : ''}
 
     ${shiftData.transactions.length>0 ? `
@@ -1019,7 +1022,8 @@ function renderKasir(){
         ui.cashGiven = e.target.value; render();
       });
     }
-    document.getElementById('btnFinalize').addEventListener('click', finalizeTransaction);
+    document.getElementById('btnFinalize').addEventListener('click', ()=> finalizeTransaction(true));
+    document.getElementById('btnFinalizeNoReceipt').addEventListener('click', ()=> finalizeTransaction(false));
   }
 
   if(shiftData.transactions.length>0) renderTxList(shiftData.transactions);
@@ -1030,13 +1034,13 @@ function renderCartList(){
   if(!el) return;
   el.innerHTML = ui.cart.map((it,idx)=>{
     const v = varianByKey(it.varian);
-    const subtotal = it.qty * v.harga;
+    const subtotal = it.qty * getHarga(it.varian);
     return `
       <div class="cart-item">
         <span class="dot" style="background:${v.color}"></span>
         <div class="info">
           <div class="nm">${DASAR[v.dasar].label} ${v.rasa}</div>
-          <div class="sub">${it.qty} × ${fmtRp(v.harga)}</div>
+          <div class="sub">${it.qty} × ${fmtRp(getHarga(it.varian))}</div>
         </div>
         <span class="amt">${fmtRp(subtotal)}</span>
         <button class="rm" data-rmidx="${idx}">🗑</button>
@@ -1082,19 +1086,23 @@ function renderTxList(transactions){
       if(!confirm('Hapus transaksi ini? Penjualan terkait juga akan dihapus dari stok.')) return;
       const id = btn.dataset.deltx;
       const shiftData = state.days[ui.inputDate][ui.inputShift];
+      const relatedSaleIds = shiftData.sales.filter(s=> s.txId===id).map(s=>s.id);
       shiftData.transactions = shiftData.transactions.filter(t=>t.id!==id);
       shiftData.sales = shiftData.sales.filter(s=> s.txId!==id);
-      saveData(); showToast('Transaksi dihapus'); render();
+      saveData();
+      cloudDeleteTx(id);
+      relatedSaleIds.forEach(sid=> cloudDeleteSale(sid));
+      showToast('Transaksi dihapus'); render();
     });
   });
 }
 
-async function finalizeTransaction(){
+async function finalizeTransaction(withReceipt){
   if(ui.cart.length===0) return;
   ensureDay(ui.inputDate);
   const shiftData = state.days[ui.inputDate][ui.inputShift];
 
-  const total = ui.cart.reduce((s,it)=> s + it.qty * varianByKey(it.varian).harga, 0);
+  const total = ui.cart.reduce((s,it)=> s + it.qty * getHarga(it.varian), 0);
   const cashGivenNum = Number(ui.cashGiven)||0;
   const change = ui.kasirPayment==='cash' ? (cashGivenNum - total) : 0;
 
@@ -1106,7 +1114,7 @@ async function finalizeTransaction(){
     time: new Date().toISOString(),
     receiptNo,
     buyerName: ui.buyerName||'',
-    items: ui.cart.map(it=>({varian:it.varian, qty:it.qty, harga:varianByKey(it.varian).harga})),
+    items: ui.cart.map(it=>({varian:it.varian, qty:it.qty, harga:getHarga(it.varian)})),
     total,
     payment: ui.kasirPayment,
     cashGiven: ui.kasirPayment==='cash' ? cashGivenNum : null,
@@ -1115,18 +1123,26 @@ async function finalizeTransaction(){
   };
 
   shiftData.transactions.push(tx);
+  cloudSetTx(tx.id, {...tx, dateStr: ui.inputDate, shift: ui.inputShift});
   ui.cart.forEach(it=>{
-    shiftData.sales.push({
-      id: uid(), time: tx.time, varian: it.varian, qty: it.qty,
+    const saleEntry = {
+      id: uid(), time: tx.time, varian: it.varian, qty: it.qty, harga: getHarga(it.varian),
       payment: ui.kasirPayment, oleh: state.employeeName||'', txId: tx.id,
-    });
+    };
+    shiftData.sales.push(saleEntry);
+    cloudSetSale(saleEntry.id, {...saleEntry, dateStr: ui.inputDate, shift: ui.inputShift});
   });
   saveData();
 
   // reset cart for next transaction
   ui.cart = []; ui.cashGiven = ''; ui.buyerName = ''; ui.kasirPayment = 'cash';
 
-  await showReceiptFor(tx);
+  if(withReceipt){
+    await showReceiptFor(tx);
+  } else {
+    showToast('Transaksi tersimpan · '+receiptNo);
+    render();
+  }
 }
 
 async function showReceiptFor(tx){
@@ -1470,13 +1486,13 @@ function renderRiwayat(){
 /* ---- BULANAN TAB ---- */
 function currentMonthLiveTotals(){
   const monthKey = todayStr().slice(0,7);
-  const perVarian = {}; VARIAN.forEach(v=> perVarian[v.key]={printed:0,sold:0});
+  const perVarian = {}; VARIAN.forEach(v=> perVarian[v.key]={printed:0,sold:0,revenue:0});
   let revenue=0, batchCount=0, dayCount=0;
   const paymentTotals = {cash:0, tf:0, qris:0};
   Object.keys(state.days).forEach(dateStr=>{
     if(dateStr.slice(0,7)!==monthKey) return;
     const t = computeDayTotals(dateStr);
-    VARIAN.forEach(v=>{ perVarian[v.key].printed+=t.perVarian[v.key].printed; perVarian[v.key].sold+=t.perVarian[v.key].sold; });
+    VARIAN.forEach(v=>{ perVarian[v.key].printed+=t.perVarian[v.key].printed; perVarian[v.key].sold+=t.perVarian[v.key].sold; perVarian[v.key].revenue+=t.perVarian[v.key].revenue; });
     revenue += t.revenue; batchCount += t.batchCount; dayCount++;
     paymentTotals.cash += t.paymentTotals.cash; paymentTotals.tf += t.paymentTotals.tf; paymentTotals.qris += t.paymentTotals.qris;
   });
@@ -1512,7 +1528,7 @@ function renderBulanan(){
             <span class="nums">${d.sold}/${d.printed} terjual</span>
           </div>
           <div class="bar-bg"><div class="bar-fill" style="width:${d.printed>0?Math.min(d.sold/d.printed*100,100):0}%;background:linear-gradient(90deg,${v.color}aa,${v.color})"></div></div>
-          <div class="stock">Omzet varian: ${fmtRp(d.sold*v.harga)}</div>
+          <div class="stock">Omzet varian: ${fmtRp(d.revenue||0)}</div>
         </div>`;
       }).join('')}
     `;
@@ -1563,6 +1579,83 @@ function renderBulanan(){
   });
 }
 
+/* ================= CLOUD SYNC (real-time listeners) ================= */
+function mergeEntityChange(change, dateStr, shift, arrGetter){
+  const data = change.doc.data();
+  const id = change.doc.id;
+  if(!dateStr || !shift) return false;
+  ensureDay(dateStr);
+  const arr = arrGetter(state.days[dateStr][shift]);
+  const idx = arr.findIndex(x=>x.id===id);
+  if(change.type==='removed'){
+    if(idx>=0){ arr.splice(idx,1); return true; }
+    return false;
+  }
+  const {dateStr:_d, shift:_s, ...rest} = data;
+  const entry = {id, ...rest};
+  if(idx>=0) arr[idx] = entry; else arr.push(entry);
+  return true;
+}
+
+function initCloudSync(){
+  if(!cloudReady) return;
+
+  // Pengaturan bersama (nama toko & harga) — berlaku untuk semua HP
+  onSnapshot(doc(db, SETTINGS_DOC), (snap)=>{
+    const statusEl = document.getElementById('syncStatus');
+    if(statusEl){
+      const online = !snap.metadata.fromCache;
+      statusEl.textContent = online ? '☁️' : '○';
+      statusEl.title = online ? 'Tersambung — data real-time' : 'Offline — pakai data lokal';
+      statusEl.style.color = online ? '#8FC97E' : 'var(--faint)';
+    }
+    if(!snap.exists()){
+      // belum ada data di cloud sama sekali -> seed dari data lokal saat ini
+      cloudSetSettings({shopName: state.shopName, prices: state.prices});
+      return;
+    }
+    const data = snap.data();
+    let changedLocal = false;
+    if(data.shopName && data.shopName !== state.shopName){
+      state.shopName = data.shopName;
+      const shopInput = document.getElementById('shopName');
+      if(shopInput && document.activeElement !== shopInput) shopInput.value = state.shopName;
+      changedLocal = true;
+    }
+    if(data.prices){
+      Object.keys(data.prices).forEach(k=>{ if(state.prices[k]!==data.prices[k]){ state.prices[k]=data.prices[k]; changedLocal=true; } });
+    }
+    if(changedLocal){ saveData(); render(); }
+  }, ()=>{});
+
+  onSnapshot(collection(db, COL_BATCHES), (snapshot)=>{
+    let changedAny = false;
+    snapshot.docChanges().forEach(change=>{
+      const data = change.doc.data();
+      if(mergeEntityChange(change, data.dateStr, data.shift, sh=>sh.batches)) changedAny = true;
+    });
+    if(changedAny){ saveData(); render(); }
+  }, ()=>{});
+
+  onSnapshot(collection(db, COL_SALES), (snapshot)=>{
+    let changedAny = false;
+    snapshot.docChanges().forEach(change=>{
+      const data = change.doc.data();
+      if(mergeEntityChange(change, data.dateStr, data.shift, sh=>sh.sales)) changedAny = true;
+    });
+    if(changedAny){ saveData(); render(); }
+  }, ()=>{});
+
+  onSnapshot(collection(db, COL_TX), (snapshot)=>{
+    let changedAny = false;
+    snapshot.docChanges().forEach(change=>{
+      const data = change.doc.data();
+      if(mergeEntityChange(change, data.dateStr, data.shift, sh=>sh.transactions)) changedAny = true;
+    });
+    if(changedAny){ saveData(); render(); }
+  }, ()=>{});
+}
+
 /* ================= INIT ================= */
 archiveOldDays();
 
@@ -1570,13 +1663,20 @@ document.getElementById('shopName').value = state.shopName;
 document.getElementById('shopName').addEventListener('input', e=>{
   state.shopName = e.target.value || 'Kamir Arab';
   saveData();
+  cloudSetSettings({shopName: state.shopName, prices: state.prices});
 });
 
 document.querySelectorAll('#bottomnav button').forEach(b=>{
   b.addEventListener('click', ()=>{ ui.tab = b.dataset.tab; render(); });
 });
 
+document.getElementById('btnOpenPriceSettings').addEventListener('click', ()=>{
+  ui.showPriceSettings = true;
+  render();
+});
+
 render();
+initCloudSync();
 
 /* ---- PWA: register service worker (only works over http(s)/localhost) ---- */
 if('serviceWorker' in navigator && location.protocol !== 'file:'){

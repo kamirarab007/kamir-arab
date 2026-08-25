@@ -1,7 +1,7 @@
 // Kamir Arab — Service Worker
 // Versi cache dinaikkan setiap kali app shell (index.html/manifest/icon) diperbarui,
 // supaya HP mengambil salinan baru alih-alih memakai cache lama.
-const CACHE_NAME = 'kamir-arab-v1.1';
+const CACHE_NAME = 'kamir-arab-v1.3';
 
 const APP_SHELL = [
   './',
