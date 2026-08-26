@@ -231,6 +231,30 @@
   .batch-kgtarget{display:flex;gap:8px;margin-top:2px;margin-bottom:2px;}
   .batch-kgtarget .bf{flex:1;}
 
+  /* ---- Ronde cetak: real-time per-loyang recording ---- */
+  .ronde-card{
+    background:var(--card-bg); border:1px solid var(--card-bd); border-radius:12px;
+    padding:11px 13px 13px; margin-bottom:10px;
+  }
+  .ronde-card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;}
+  .ronde-card .top .lbl{font-family:'Fraunces',serif;font-weight:600;font-size:13.5px;color:#E8DFC9;}
+  .loyang-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .loyang-col{background:rgba(245,239,227,0.03);border:1px solid var(--card-bd);border-radius:10px;padding:9px;}
+  .loyang-col label{display:block;font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;font-weight:700;}
+  .loyang-col select{
+    width:100%; background:rgba(245,239,227,0.05); border:1px solid rgba(245,239,227,0.14);
+    border-radius:8px; padding:8px 8px; color:var(--cream); font-size:12.5px;
+    font-family:'DM Sans',sans-serif; outline:none; margin-bottom:7px;
+  }
+  .loyang-col .qtyrow{display:flex;align-items:center;gap:6px;}
+  .loyang-col .qtyrow input{padding:7px 6px;font-size:13px;text-align:center;}
+  .loyang-col .qtyrow span{font-size:10.5px;color:var(--faint);white-space:nowrap;}
+  .btn-add-ronde{
+    width:100%; padding:12px 16px; border-radius:12px; cursor:pointer;
+    border:1px dashed rgba(232,197,71,0.45); background:rgba(232,197,71,0.06); color:var(--gold);
+    font-weight:700; font-size:13.5px; font-family:'DM Sans',sans-serif; margin-bottom:14px;
+  }
+
   .qty-stepper{display:flex;align-items:center;gap:6px;}
   .qty-stepper button{
     width:26px;height:26px;border-radius:8px;border:1px solid rgba(245,239,227,0.16);
@@ -364,6 +388,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
 });
 
 const COL_BATCHES = 'kamir_batches';
+const COL_RONDES = 'kamir_rondes';
 const COL_SALES = 'kamir_sales';
 const COL_TX = 'kamir_transactions';
 const SETTINGS_DOC = 'kamir_settings/main';
@@ -372,6 +397,9 @@ const SETTINGS_DOC = 'kamir_settings/main';
 function cloudSetBatch(id, data){ if(!cloudReady) return; setDoc(doc(db, COL_BATCHES, id), data).catch(()=>{}); }
 function cloudUpdateBatch(id, patch){ if(!cloudReady) return; updateDoc(doc(db, COL_BATCHES, id), patch).catch(()=>{}); }
 function cloudDeleteBatch(id){ if(!cloudReady) return; deleteDoc(doc(db, COL_BATCHES, id)).catch(()=>{}); }
+function cloudSetRonde(id, data){ if(!cloudReady) return; setDoc(doc(db, COL_RONDES, id), data).catch(()=>{}); }
+function cloudUpdateRonde(id, patch){ if(!cloudReady) return; updateDoc(doc(db, COL_RONDES, id), patch).catch(()=>{}); }
+function cloudDeleteRonde(id){ if(!cloudReady) return; deleteDoc(doc(db, COL_RONDES, id)).catch(()=>{}); }
 function cloudSetSale(id, data){ if(!cloudReady) return; setDoc(doc(db, COL_SALES, id), data).catch(()=>{}); }
 function cloudUpdateSale(id, patch){ if(!cloudReady) return; updateDoc(doc(db, COL_SALES, id), patch).catch(()=>{}); }
 function cloudDeleteSale(id){ if(!cloudReady) return; deleteDoc(doc(db, COL_SALES, id)).catch(()=>{}); }
@@ -422,9 +450,10 @@ const PAYMENTS = {
 };
 function paymentKey(p){ return (p==='tf'||p==='qris') ? p : 'cash'; }
 
-function emptyDay(){ return { pagi:{batches:[],sales:[],transactions:[]}, sore:{batches:[],sales:[],transactions:[]} }; }
+function emptyDay(){ return { pagi:{batches:[],rondes:[],sales:[],transactions:[]}, sore:{batches:[],rondes:[],sales:[],transactions:[]} }; }
 function ensureShiftArrays(shiftData){
   if(!shiftData.batches) shiftData.batches = [];
+  if(!shiftData.rondes) shiftData.rondes = [];
   if(!shiftData.sales) shiftData.sales = [];
   if(!shiftData.transactions) shiftData.transactions = [];
   return shiftData;
@@ -553,11 +582,12 @@ function computeDayTotals(dateStr){
   const paymentTotals = {cash:0, tf:0, qris:0};
   VARIAN.forEach(v=> perVarian[v.key] = {printed:0, sold:0, revenue:0});
   ['pagi','sore'].forEach(sh=>{
-    const s = day[sh] || {batches:[],sales:[]};
+    const s = day[sh] || {batches:[],rondes:[],sales:[]};
     (s.batches||[]).forEach(b=>{
       batchCount++;
       RASA.forEach(r=>{ perVarian[b.dasar+'_'+r.key].printed += Number(b[r.key])||0; });
     });
+    (s.rondes||[]).forEach(rd=>{ addRondePrinted(rd, perVarian); });
     (s.sales||[]).forEach(sale=>{
       const harga = (typeof sale.harga === 'number') ? sale.harga : getHarga(sale.varian);
       const amt = (Number(sale.qty)||0) * harga;
@@ -571,9 +601,22 @@ function computeDayTotals(dateStr){
   return {perVarian, revenue, batchCount, totalPrinted, totalSold, paymentTotals};
 }
 
+function addRondePrinted(rd, perVarian){
+  ['loyang1','loyang2'].forEach(lk=>{
+    const l = rd[lk];
+    if(l && l.varian && perVarian[l.varian]){ perVarian[l.varian].printed += Number(l.qty)||0; }
+  });
+}
+
+function rondeTotalPcs(rd){
+  let sum = 0;
+  ['loyang1','loyang2'].forEach(lk=>{ if(rd[lk] && rd[lk].varian) sum += Number(rd[lk].qty)||0; });
+  return sum;
+}
+
 function computeShiftTotals(dateStr, shift){
   const day = state.days[dateStr] || emptyDay();
-  const s = day[shift] || {batches:[],sales:[]};
+  const s = day[shift] || {batches:[],rondes:[],sales:[]};
   const perVarian = {};
   let revenue=0, totalPrinted=0, totalSold=0, kgPutih=0, kgPandan=0;
   const paymentTotals = {cash:0, tf:0, qris:0};
@@ -582,6 +625,7 @@ function computeShiftTotals(dateStr, shift){
     if(b.dasar==='putih') kgPutih += Number(b.kg)||0; else kgPandan += Number(b.kg)||0;
     RASA.forEach(r=>{ perVarian[b.dasar+'_'+r.key].printed += Number(b[r.key])||0; });
   });
+  (s.rondes||[]).forEach(rd=>{ addRondePrinted(rd, perVarian); });
   (s.sales||[]).forEach(sale=>{
     const harga = (typeof sale.harga === 'number') ? sale.harga : getHarga(sale.varian);
     const amt = (Number(sale.qty)||0) * harga;
@@ -670,7 +714,7 @@ function renderInput(){
       `).join('')}
     </div>
 
-    <h2 class="section-title">Adonan dicetak</h2>
+    <h2 class="section-title">Adonan dibawa</h2>
     ${renderAdonanBlock('putih')}
     ${renderAdonanBlock('pandan')}
 
@@ -678,6 +722,11 @@ function renderInput(){
       <h2 class="section-title sm">Adonan tercatat — shift ${SHIFTS[ui.inputShift].label.toLowerCase()}</h2>
       <div id="batchActivityList"></div>
     ` : ''}
+
+    <h2 class="section-title">Ronde cetak</h2>
+    <div id="rondeList"></div>
+    <button class="btn-add-ronde" id="btnAddRonde">+ Tambah Ronde</button>
+    <div class="target-line" id="rondeTargetLine"></div>
 
     <div class="empty" style="margin-top:24px;">Pencatatan penjualan sekarang dilakukan lewat tab <b style="color:var(--gold);">🧾 Kasir</b>.</div>
 
@@ -699,6 +748,16 @@ function renderInput(){
   ['putih','pandan'].forEach(setupAdonanBlockLogic);
 
   if(shiftData.batches.length>0) renderBatchActivity(shiftData.batches);
+
+  renderRondeList(shiftData.rondes);
+  document.getElementById('btnAddRonde').addEventListener('click', ()=>{
+    ensureDay(ui.inputDate);
+    const ronde = {id:uid(), time:new Date().toISOString(), oleh: state.employeeName||'', loyang1:{varian:'',qty:7}, loyang2:{varian:'',qty:7}};
+    state.days[ui.inputDate][ui.inputShift].rondes.push(ronde);
+    saveData();
+    cloudSetRonde(ronde.id, {...ronde, dateStr: ui.inputDate, shift: ui.inputShift});
+    render();
+  });
 }
 
 function renderAdonanBlock(dasar){
@@ -706,26 +765,12 @@ function renderAdonanBlock(dasar){
   return `
     <div class="adonan-block ${dasar}">
       <div class="blabel"><span class="dot" style="background:${info.color}"></span>Adonan ${info.label}</div>
-      <div class="batch-kgtarget">
-        <div class="bf">
-          <label>Berat (kg)</label>
-          <input type="number" min="0" step="0.5" id="kg_${dasar}" placeholder="0" />
-        </div>
-        <div class="bf">
-          <label>Target cetak</label>
-          <input type="number" min="0" id="target_${dasar}" placeholder="0" />
-        </div>
+      <div class="bf">
+        <label>Berat dibawa (kg)</label>
+        <input type="number" min="0" step="0.5" id="kg_${dasar}" placeholder="0" />
       </div>
-      <div class="target-line" id="targetline_${dasar}">Isi berat adonan — target otomatis ${KAMIR_PER_KG}/kg (bisa diubah manual).</div>
-      <div class="batch-fields">
-        ${RASA.map(r=>`
-          <div class="bf">
-            <label>${r.label}</label>
-            <input type="number" min="0" id="rasa_${dasar}_${r.key}" placeholder="0" />
-          </div>
-        `).join('')}
-      </div>
-      <div style="height:12px;"></div>
+      <div class="target-line" id="targetline_${dasar}">Target acuan: isi berat adonan dulu (${KAMIR_PER_KG}/kg).</div>
+      <div style="height:10px;"></div>
       <button class="primary" id="btnSave_${dasar}">Simpan Adonan ${info.label}</button>
     </div>
   `;
@@ -733,46 +778,29 @@ function renderAdonanBlock(dasar){
 
 function setupAdonanBlockLogic(dasar){
   const kgInput = document.getElementById('kg_'+dasar);
-  const targetInput = document.getElementById('target_'+dasar);
   const line = document.getElementById('targetline_'+dasar);
-  const rasaInputs = RASA.map(r=> document.getElementById('rasa_'+dasar+'_'+r.key));
 
   function updateLine(){
-    const target = Number(targetInput.value)||0;
-    const sum = rasaInputs.reduce((s,i)=> s+(Number(i.value)||0), 0);
-    if(target<=0){
+    const kg = Number(kgInput.value)||0;
+    if(kg<=0){
       line.className = 'target-line';
-      line.innerHTML = 'Isi berat adonan — target otomatis '+KAMIR_PER_KG+'/kg (bisa diubah manual).';
+      line.innerHTML = 'Target acuan: isi berat adonan dulu ('+KAMIR_PER_KG+'/kg).';
     } else {
-      const match = sum===target;
-      line.className = 'target-line '+(match?'match':'off');
-      line.innerHTML = 'Sudah diisi <b class="sum">'+sum+'</b> dari target <b>'+target+'</b> kamir'+(match?' — pas ✓':'')+ ' <span style="opacity:.7">(boleh tidak pas, hanya panduan)</span>';
+      line.className = 'target-line';
+      line.innerHTML = 'Target acuan ± <b>'+Math.round(kg*KAMIR_PER_KG)+'</b> kamir dari '+kg+' kg <span style="opacity:.7">(dicek lagi di bawah, dari Ronde)</span>';
     }
   }
-  kgInput.addEventListener('input', ()=>{
-    const kg = Number(kgInput.value)||0;
-    targetInput.value = kg>0 ? Math.round(kg*KAMIR_PER_KG) : '';
-    updateLine();
-  });
-  targetInput.addEventListener('input', updateLine);
-  rasaInputs.forEach(i=> i.addEventListener('input', updateLine));
+  kgInput.addEventListener('input', updateLine);
 
   document.getElementById('btnSave_'+dasar).addEventListener('click', ()=>{
     const kg = Number(kgInput.value)||0;
-    const target = Number(targetInput.value)||0;
-    const rasaVals = {};
-    let sum = 0;
-    RASA.forEach(r=>{
-      const v = Number(document.getElementById('rasa_'+dasar+'_'+r.key).value)||0;
-      rasaVals[r.key] = v; sum += v;
-    });
-    if(sum<=0){ showToast('Isi jumlah kamir yang dicetak untuk adonan '+DASAR[dasar].label+'.', true); return; }
+    if(kg<=0){ showToast('Isi dulu berat adonan '+DASAR[dasar].label+'.', true); return; }
     ensureDay(ui.inputDate);
-    const batch = {id:uid(), time:new Date().toISOString(), dasar, kg, target, oleh: state.employeeName||'', ...rasaVals};
+    const batch = {id:uid(), time:new Date().toISOString(), dasar, kg, oleh: state.employeeName||''};
     state.days[ui.inputDate][ui.inputShift].batches.push(batch);
     saveData();
     cloudSetBatch(batch.id, {...batch, dateStr: ui.inputDate, shift: ui.inputShift});
-    showToast('Adonan '+DASAR[dasar].label+' tersimpan · '+sum+' kamir dicetak');
+    showToast('Adonan '+DASAR[dasar].label+' · '+kg+' kg tersimpan');
     render();
   });
 }
@@ -787,27 +815,10 @@ function renderBatchActivity(batches){
           <span class="lbl"><span class="dot" style="background:${info.color}"></span>${info.label} · ${b.kg||0} kg${b.oleh?' <span style="color:var(--faint);font-weight:500;">· '+b.oleh+'</span>':''}</span>
           <span class="actions"><button class="icon-btn danger" data-delbatch="${b.id}">🗑</button></span>
         </div>
-        <div class="batch-fields">
-          ${RASA.map(r=>`
-            <div class="bf">
-              <label>${r.label}</label>
-              <input type="number" min="0" data-editbatch="${b.id}" data-field="${r.key}" value="${b[r.key]||0}" />
-            </div>
-          `).join('')}
-        </div>
-        <div class="target-line" style="margin-top:8px;">Target saat itu: <b>${b.target||0}</b> kamir</div>
       </div>
     `;
   }).join('');
 
-  el.querySelectorAll('input[data-editbatch]').forEach(inp=>{
-    inp.addEventListener('change', ()=>{
-      const id = inp.dataset.editbatch, field = inp.dataset.field;
-      const val = Number(inp.value)||0;
-      const batch = state.days[ui.inputDate][ui.inputShift].batches.find(x=>x.id===id);
-      if(batch){ batch[field] = val; saveData(); cloudUpdateBatch(id, {[field]: val}); showToast('Diperbarui'); render(); }
-    });
-  });
   el.querySelectorAll('[data-delbatch]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       if(!confirm('Hapus entri adonan ini?')) return;
@@ -816,6 +827,82 @@ function renderBatchActivity(batches){
       saveData(); cloudDeleteBatch(id); showToast('Entri adonan dihapus'); render();
     });
   });
+}
+
+/* ---- Ronde cetak: per-loyang real-time recording ---- */
+function loyangSelectOptions(selected){
+  return `<option value="">— pilih —</option>` + VARIAN.map(v=>
+    `<option value="${v.key}" ${selected===v.key?'selected':''}>${DASAR[v.dasar].label} ${v.rasa}</option>`
+  ).join('');
+}
+
+function renderRondeList(rondes){
+  const el = document.getElementById('rondeList');
+  if(rondes.length===0){
+    el.innerHTML = `<div class="empty">Belum ada ronde. Tap "+ Tambah Ronde" tiap kali selesai cetak.</div>`;
+  } else {
+    el.innerHTML = rondes.map((rd,idx)=>`
+      <div class="ronde-card" data-rondeid="${rd.id}">
+        <div class="top">
+          <span class="lbl">Ronde ${idx+1}${rd.oleh?' <span style="color:var(--faint);font-weight:500;font-size:11px;">· '+rd.oleh+'</span>':''}</span>
+          <button class="icon-btn danger" data-delronde="${rd.id}">🗑</button>
+        </div>
+        <div class="loyang-grid">
+          ${['loyang1','loyang2'].map((lk,i)=>`
+            <div class="loyang-col">
+              <label>Loyang ${i+1}</label>
+              <select data-rondefield="${rd.id}|${lk}|varian">${loyangSelectOptions(rd[lk].varian)}</select>
+              <div class="qtyrow">
+                <input type="number" min="0" data-rondefield="${rd.id}|${lk}|qty" value="${rd[lk].qty}" />
+                <span>pcs</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  el.querySelectorAll('select[data-rondefield], input[data-rondefield]').forEach(inp=>{
+    const ev = inp.tagName==='SELECT' ? 'change' : 'input';
+    inp.addEventListener(ev, ()=>{
+      const [id, lk, field] = inp.dataset.rondefield.split('|');
+      const ronde = state.days[ui.inputDate][ui.inputShift].rondes.find(x=>x.id===id);
+      if(!ronde) return;
+      ronde[lk][field] = field==='qty' ? (Number(inp.value)||0) : inp.value;
+      saveData();
+      cloudUpdateRonde(id, {[lk]: ronde[lk]});
+      updateRondeTargetLine();
+    });
+  });
+
+  el.querySelectorAll('[data-delronde]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      if(!confirm('Hapus ronde ini?')) return;
+      const id = btn.dataset.delronde;
+      state.days[ui.inputDate][ui.inputShift].rondes = state.days[ui.inputDate][ui.inputShift].rondes.filter(x=>x.id!==id);
+      saveData(); cloudDeleteRonde(id); showToast('Ronde dihapus'); render();
+    });
+  });
+
+  updateRondeTargetLine();
+}
+
+function updateRondeTargetLine(){
+  const line = document.getElementById('rondeTargetLine');
+  if(!line) return;
+  const shiftData = state.days[ui.inputDate][ui.inputShift];
+  const shiftTotals = computeShiftTotals(ui.inputDate, ui.inputShift);
+  const target = Math.round((shiftTotals.kgPutih + shiftTotals.kgPandan) * KAMIR_PER_KG);
+  const actual = shiftData.rondes.reduce((s,rd)=> s + rondeTotalPcs(rd), 0);
+  if(target<=0){
+    line.className = 'target-line';
+    line.innerHTML = 'Isi adonan (kg) di atas untuk melihat target acuan.';
+  } else {
+    const diff = actual - target;
+    line.className = 'target-line '+(diff===0?'match':'off');
+    line.innerHTML = 'Total dari Ronde: <b class="sum">'+actual+'</b> dari target <b>'+target+'</b> kamir'+(diff===0?' — pas ✓':' <span style="opacity:.7">(selisih '+(diff>0?'+':'')+diff+', boleh tidak pas)</span>');
+  }
 }
 
 
@@ -1633,6 +1720,15 @@ function initCloudSync(){
     snapshot.docChanges().forEach(change=>{
       const data = change.doc.data();
       if(mergeEntityChange(change, data.dateStr, data.shift, sh=>sh.batches)) changedAny = true;
+    });
+    if(changedAny){ saveData(); render(); }
+  }, ()=>{});
+
+  onSnapshot(collection(db, COL_RONDES), (snapshot)=>{
+    let changedAny = false;
+    snapshot.docChanges().forEach(change=>{
+      const data = change.doc.data();
+      if(mergeEntityChange(change, data.dateStr, data.shift, sh=>sh.rondes)) changedAny = true;
     });
     if(changedAny){ saveData(); render(); }
   }, ()=>{});
